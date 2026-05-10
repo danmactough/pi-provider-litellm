@@ -52,7 +52,7 @@ async function loadExtension(agentDir: string): Promise<(pi: TestPi) => Promise<
     return { AuthStorage: TestAuthStorage, getAgentDir: () => agentDir };
   });
   const mod = await import("../src/index.js");
-  return mod.default as (pi: TestPi) => Promise<void>;
+  return mod.default as unknown as (pi: TestPi) => Promise<void>;
 }
 
 function createPi(): TestPi {
