@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - CI now verifies a clean build and `npm pack --dry-run` after checks.
+- Added package gallery image metadata.
 
 ## [0.1.1] - 2026-04-28
 
