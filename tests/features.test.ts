@@ -526,19 +526,19 @@ describe("feature parity", () => {
     for (const handler of sessionStartHandlers) {
       await handler({ reason: "start" }, { sessionManager: { getSessionFile: () => undefined } });
     }
-    await vi.waitFor(() => expect(callCount).toBe(1));
-
-    // Verify costs updated via message_end
     const endHandler = pi.handlers.get("message_end")?.[0];
-    const result = await endHandler?.({
-      message: {
-        role: "assistant",
-        model: "test-model",
-        usage: { input: 1000, output: 1000 },
-      },
+    await vi.waitFor(async () => {
+      const result = await endHandler?.({
+        message: {
+          role: "assistant",
+          model: "test-model",
+          usage: { input: 1000, output: 1000 },
+        },
+      });
+      // After refresh: input: 0.000006 * 1000 = 0.006, output: 0.000030 * 1000 = 0.030
+      expect(result.message.usage.cost.total).toBeCloseTo(0.036, 6);
     });
-    // After refresh: input: 0.000006 * 1000 = 0.006, output: 0.000030 * 1000 = 0.030
-    expect(result.message.usage.cost.total).toBeCloseTo(0.036, 6);
+    expect(callCount).toBe(1);
   });
 
   it("handles stale refresh failure silently on session_start", async () => {
