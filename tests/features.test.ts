@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+vi.unmock("@earendil-works/pi-coding-agent");
+
 type TestProviderConfig = {
   baseUrl?: string;
   apiKey?: string;
@@ -81,7 +83,6 @@ function createPi(): TestPi {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
-  vi.unmock("@earendil-works/pi-coding-agent");
   delete process.env.LITELLM_BASE_URL;
   delete process.env.LITELLM_API_KEY;
   delete process.env.LITELLM_DISCOVERY_TIMEOUT_MS;

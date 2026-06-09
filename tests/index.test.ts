@@ -14,6 +14,8 @@ const ENV_KEYS = [
 ];
 const ORIGINAL_ENV = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));
 
+vi.unmock("@earendil-works/pi-coding-agent");
+
 type TestProviderConfig = {
   baseUrl?: string;
   apiKey?: string;
@@ -164,7 +166,6 @@ afterEach(() => {
   }
   vi.restoreAllMocks();
   vi.resetModules();
-  vi.unmock("@earendil-works/pi-coding-agent");
 });
 
 describe("extension startup", () => {
