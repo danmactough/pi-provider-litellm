@@ -87,6 +87,25 @@ function tokenExpiresAt(apiKey: string, opaqueFallback = PERMANENT_TOKEN_EXPIRES
   }
 }
 
+async function generateVirtualKey(baseUrl: string, userToken: string, signal?: AbortSignal): Promise<string> {
+  const response = await fetch(`${baseUrl}/user/key/generate`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${userToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({}),
+    signal,
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Virtual key generation failed (${response.status}): ${text}`);
+  }
+  const data = (await response.json()) as { key?: unknown };
+  if (typeof data.key !== "string" || !data.key) throw new Error("No key in response from /user/key/generate");
+  return data.key;
+}
+
 function getLiteLLMApiKey(credentials: OAuthCredentials): string {
   return credentials.access;
 }
@@ -189,12 +208,60 @@ async function loginLiteLLM(
       placeholder: "https://litellm.example.com",
     })
   ).trim();
-  const apiKeyInput = (await callbacks.onPrompt({ message: "Enter API key:" })).trim();
-  if (!rawBaseUrl || !apiKeyInput) throw new Error("Both base URL and API key are required");
+  if (!rawBaseUrl) throw new Error("Base URL is required");
 
   const baseUrl = normalizeBaseUrl(rawBaseUrl);
-  const refresh = apiKeyInput.startsWith("!") ? apiKeyInput : "";
-  const apiKey = refresh ? executeApiKeyCommand(refresh) : apiKeyInput;
+  const method = (
+    await callbacks.onPrompt({
+      message: "Select login method (1 = API key / !command, 2 = SSO / Enterprise JWT):",
+    })
+  ).trim();
+
+  let apiKey: string;
+  let refresh: string;
+  let expires: number;
+
+  if (method === "2") {
+    callbacks.onProgress?.(`Open ${baseUrl}/login in your browser to authenticate via SSO.`);
+    const rawToken = (await callbacks.onPrompt({ message: "Paste your SSO token from the LiteLLM UI:" }))
+      .trim()
+      .replace(/^Bearer\s+/i, "")
+      .trim();
+    if (!rawToken) throw new Error("SSO token is required");
+
+    const wantVirtualKey = (
+      await callbacks.onPrompt({ message: "Generate a LiteLLM virtual key from this token? (y/n):" })
+    )
+      .trim()
+      .toLowerCase();
+
+    if (wantVirtualKey !== "n") {
+      try {
+        callbacks.onProgress?.("Generating virtual key...");
+        apiKey = await generateVirtualKey(baseUrl, rawToken, callbacks.signal);
+        refresh = "";
+        expires = PERMANENT_TOKEN_EXPIRES_AT;
+        callbacks.onProgress?.("Virtual key generated and will be used for API calls.");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        callbacks.onProgress?.(`LiteLLM: virtual key generation failed (${message}); using SSO token directly.`);
+        apiKey = rawToken;
+        refresh = "";
+        expires = tokenExpiresAt(rawToken, PERMANENT_TOKEN_EXPIRES_AT);
+      }
+    } else {
+      apiKey = rawToken;
+      refresh = "";
+      expires = tokenExpiresAt(rawToken, PERMANENT_TOKEN_EXPIRES_AT);
+    }
+  } else {
+    const apiKeyInput = (await callbacks.onPrompt({ message: "Enter API key:" })).trim();
+    if (!apiKeyInput) throw new Error("Both base URL and API key are required");
+    refresh = apiKeyInput.startsWith("!") ? apiKeyInput : "";
+    apiKey = refresh ? executeApiKeyCommand(refresh) : apiKeyInput;
+    expires = tokenExpiresAt(apiKey, refresh ? EXPIRE_TOKEN_IMMEDIATELY : PERMANENT_TOKEN_EXPIRES_AT);
+  }
+
   const { models, source } = await discoverModels(baseUrl, apiKey, {
     timeoutMs: LOGIN_TIMEOUT_MS,
     signal: callbacks.signal,
@@ -214,7 +281,7 @@ async function loginLiteLLM(
   return {
     access: apiKey,
     refresh,
-    expires: tokenExpiresAt(apiKey, refresh ? EXPIRE_TOKEN_IMMEDIATELY : PERMANENT_TOKEN_EXPIRES_AT),
+    expires,
     baseUrl,
   } as OAuthCredentials & { baseUrl: string };
 }

@@ -377,13 +377,19 @@ describe("extension startup", () => {
     const credential = await pi.providers[0]?.config.oauth?.login({
       onPrompt: async (options) => {
         promptMessages.push(options.message);
-        return promptMessages.length === 1 ? " http://127.0.0.1:4000/v1 " : " sk-login ";
+        if (options.placeholder) return " http://127.0.0.1:4000/v1 ";
+        if (options.message.includes("Select login method")) return "1";
+        return " sk-login ";
       },
       onProgress: progress,
       signal: new AbortController().signal,
     });
 
-    expect(promptMessages).toEqual(["Enter LiteLLM proxy URL (no trailing /v1):", "Enter API key:"]);
+    expect(promptMessages).toEqual([
+      "Enter LiteLLM proxy URL (no trailing /v1):",
+      "Select login method (1 = API key / !command, 2 = SSO / Enterprise JWT):",
+      "Enter API key:",
+    ]);
     expect(seenRequests).toEqual([{ url: "http://127.0.0.1:4000/model/info", authorization: "Bearer sk-login" }]);
     expect(credential).toMatchObject({
       access: "sk-login",
@@ -454,7 +460,9 @@ describe("extension startup", () => {
         ui: {
           input: async (message: string, placeholder?: string) => {
             promptMessages.push(message);
-            return placeholder ? " http://127.0.0.1:4000/v1 " : " sk-login ";
+            if (placeholder) return " http://127.0.0.1:4000/v1 ";
+            if (message.includes("Select login method")) return "1";
+            return " sk-login ";
           },
           notify: (message: string, type: string) => notifications.push({ message, type }),
         },
@@ -470,7 +478,11 @@ describe("extension startup", () => {
     );
 
     expect(result).toEqual({ action: "handled" });
-    expect(promptMessages).toEqual(["Enter LiteLLM proxy URL (no trailing /v1):", "Enter API key:"]);
+    expect(promptMessages).toEqual([
+      "Enter LiteLLM proxy URL (no trailing /v1):",
+      "Select login method (1 = API key / !command, 2 = SSO / Enterprise JWT):",
+      "Enter API key:",
+    ]);
     expect(savedCredentials.litellm).toMatchObject({
       type: "oauth",
       access: "sk-login",
@@ -719,5 +731,169 @@ describe("extension startup", () => {
     await extension(createPi());
 
     expect(seenAuthHeaders).toEqual([`Bearer ${fresh}`, `Bearer ${fresh}`]);
+  });
+
+  it("enterprise SSO login generates a virtual key and uses it as the access token", async () => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_DISCOVERY_TIMEOUT_MS = "0";
+    const jwt = makeJwt(Math.floor(Date.now() / 1000) + 3600);
+    const seenRequests: Array<{ url: string; method: string; authorization: string }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      seenRequests.push({
+        url,
+        method: String(init?.method ?? "GET"),
+        authorization: new Headers(init?.headers).get("authorization") ?? "",
+      });
+      if (url.endsWith("/user/key/generate")) return jsonResponse(200, { key: "sk-virtual-abc" });
+      if (url.endsWith("/model/info"))
+        return jsonResponse(200, { data: [{ model_name: "gpt-4o", model_info: { mode: "chat" } }] });
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    const credential = await pi.providers[0]?.config.oauth?.login({
+      onPrompt: async (options) => {
+        if (options.placeholder) return "https://litellm.example.com";
+        if (options.message.includes("Select login method")) return "2";
+        if (options.message.includes("SSO token")) return `Bearer ${jwt}`;
+        return "y";
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(credential).toMatchObject({
+      access: "sk-virtual-abc",
+      refresh: "",
+      expires: Number.MAX_SAFE_INTEGER,
+      baseUrl: "https://litellm.example.com",
+    });
+    expect(seenRequests).toContainEqual(
+      expect.objectContaining({
+        url: "https://litellm.example.com/user/key/generate",
+        method: "POST",
+        authorization: `Bearer ${jwt}`,
+      }),
+    );
+    expect(seenRequests).toContainEqual(
+      expect.objectContaining({
+        url: "https://litellm.example.com/model/info",
+        authorization: "Bearer sk-virtual-abc",
+      }),
+    );
+  });
+
+  it("enterprise SSO login strips Bearer prefix from pasted SSO token", async () => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_DISCOVERY_TIMEOUT_MS = "0";
+    const jwt = makeJwt(Math.floor(Date.now() / 1000) + 3600);
+    const seenAuthorizations: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      seenAuthorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+      if (url.endsWith("/user/key/generate")) return jsonResponse(200, { key: "sk-stripped" });
+      if (url.endsWith("/model/info"))
+        return jsonResponse(200, { data: [{ model_name: "gpt-4o", model_info: { mode: "chat" } }] });
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    await pi.providers[0]?.config.oauth?.login({
+      onPrompt: async (options) => {
+        if (options.placeholder) return "https://litellm.example.com";
+        if (options.message.includes("Select login method")) return "2";
+        if (options.message.includes("SSO token")) return `  Bearer  ${jwt}  `;
+        return "y";
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(seenAuthorizations[0]).toBe(`Bearer ${jwt}`);
+  });
+
+  it("enterprise SSO login uses JWT directly when user declines virtual key generation", async () => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_DISCOVERY_TIMEOUT_MS = "0";
+    const jwt = makeJwt(Math.floor(Date.now() / 1000) + 3600);
+    const seenRequests: Array<{ url: string; method: string }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      seenRequests.push({ url, method: String(init?.method ?? "GET") });
+      if (url.endsWith("/model/info"))
+        return jsonResponse(200, { data: [{ model_name: "gpt-4o", model_info: { mode: "chat" } }] });
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    const credential = await pi.providers[0]?.config.oauth?.login({
+      onPrompt: async (options) => {
+        if (options.placeholder) return "https://litellm.example.com";
+        if (options.message.includes("Select login method")) return "2";
+        if (options.message.includes("SSO token")) return jwt;
+        return "n";
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(credential).toMatchObject({ access: jwt, refresh: "" });
+    expect(credential?.expires).toBeLessThan(Number.MAX_SAFE_INTEGER);
+    expect(seenRequests.every(({ url }) => !url.includes("key/generate"))).toBe(true);
+  });
+
+  it("enterprise SSO login falls back to JWT when virtual key generation fails", async () => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_DISCOVERY_TIMEOUT_MS = "0";
+    const jwt = makeJwt(Math.floor(Date.now() / 1000) + 3600);
+    const progress = vi.fn();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/user/key/generate")) return jsonResponse(403, { error: "forbidden" });
+      if (url.endsWith("/model/info"))
+        return jsonResponse(200, { data: [{ model_name: "gpt-4o", model_info: { mode: "chat" } }] });
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    const credential = await pi.providers[0]?.config.oauth?.login({
+      onPrompt: async (options) => {
+        if (options.placeholder) return "https://litellm.example.com";
+        if (options.message.includes("Select login method")) return "2";
+        if (options.message.includes("SSO token")) return jwt;
+        return "y";
+      },
+      onProgress: progress,
+      signal: new AbortController().signal,
+    });
+
+    expect(credential).toMatchObject({ access: jwt, refresh: "" });
+    expect(progress).toHaveBeenCalledWith(expect.stringContaining("virtual key generation failed"));
+  });
+
+  it("enterprise SSO login throws when SSO token is empty", async () => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_DISCOVERY_TIMEOUT_MS = "0";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, { data: [] }));
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    await expect(
+      pi.providers[0]?.config.oauth?.login({
+        onPrompt: async (options) => {
+          if (options.placeholder) return "https://litellm.example.com";
+          if (options.message.includes("Select login method")) return "2";
+          return "";
+        },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("SSO token is required");
   });
 });
