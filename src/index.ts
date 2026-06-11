@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Api, AssistantMessage, Model, OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
@@ -85,6 +85,21 @@ function tokenExpiresAt(apiKey: string, opaqueFallback = PERMANENT_TOKEN_EXPIRES
   } catch {
     return opaqueFallback;
   }
+}
+
+function openInBrowser(url: string): void {
+  // Never invoke a shell here: cmd.exe re-parses metacharacters before `start`
+  // runs, which would make URL contents injectable. Launch is best-effort; the
+  // URL is also shown to the user, so launcher failures must not crash the process.
+  const [cmd, args]: [string, string[]] =
+    process.platform === "darwin"
+      ? ["open", [url]]
+      : process.platform === "win32"
+        ? ["rundll32", ["url.dll,FileProtocolHandler", url]]
+        : ["xdg-open", [url]];
+  spawn(cmd, args, { stdio: "ignore", detached: true })
+    .on("error", () => undefined)
+    .unref();
 }
 
 async function generateVirtualKey(baseUrl: string, userToken: string, signal?: AbortSignal): Promise<string> {
@@ -222,7 +237,10 @@ async function loginLiteLLM(
   let expires: number;
 
   if (method === "2") {
-    callbacks.onProgress?.(`Open ${baseUrl}/login in your browser to authenticate via SSO.`);
+    callbacks.onAuth?.({
+      url: `${baseUrl}/login`,
+      instructions: "Authenticate via SSO, then copy your token from the LiteLLM UI.",
+    });
     const rawToken = (await callbacks.onPrompt({ message: "Paste your SSO token from the LiteLLM UI:" }))
       .trim()
       .replace(/^Bearer\s+/i, "")
@@ -577,7 +595,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   async function runLogin(ctx: LoginContext): Promise<void> {
     const credential = await loginLiteLLM(
       {
-        onAuth: () => undefined,
+        onAuth: ({ url, instructions }) => {
+          openInBrowser(url);
+          ctx.ui.notify(instructions ? `${url} — ${instructions}` : url, "info");
+        },
         onDeviceCode: () => undefined,
         onPrompt: async ({ message, placeholder }) => {
           const value = await ctx.ui.input(message, placeholder);

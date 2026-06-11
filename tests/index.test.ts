@@ -25,6 +25,7 @@ type TestProviderConfig = {
   oauth?: {
     login: (callbacks: {
       onPrompt: (options: { message: string; placeholder?: string }) => Promise<string>;
+      onAuth?: (info: { url: string; instructions?: string }) => void;
       onProgress?: (message: string) => void;
       signal?: AbortSignal;
     }) => Promise<{ access: string; refresh: string; expires: number; baseUrl?: string }>;
@@ -754,6 +755,7 @@ describe("extension startup", () => {
     const pi = createPi();
     await extension(pi);
 
+    const authInfos: Array<{ url: string; instructions?: string }> = [];
     const credential = await pi.providers[0]?.config.oauth?.login({
       onPrompt: async (options) => {
         if (options.placeholder) return "https://litellm.example.com";
@@ -761,9 +763,16 @@ describe("extension startup", () => {
         if (options.message.includes("SSO token")) return `Bearer ${jwt}`;
         return "y";
       },
+      onAuth: (info) => authInfos.push(info),
       signal: new AbortController().signal,
     });
 
+    expect(authInfos).toEqual([
+      {
+        url: "https://litellm.example.com/login",
+        instructions: "Authenticate via SSO, then copy your token from the LiteLLM UI.",
+      },
+    ]);
     expect(credential).toMatchObject({
       access: "sk-virtual-abc",
       refresh: "",
