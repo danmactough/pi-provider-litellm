@@ -108,6 +108,7 @@ describe("supply-chain guard", () => {
         "discover",
         "gcloud-token",
         "gcloud-token-cli",
+        "headers",
         "index",
         "litellm",
         "mcp-tools",

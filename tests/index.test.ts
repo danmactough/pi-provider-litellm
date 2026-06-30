@@ -9,6 +9,7 @@ const ENV_KEYS = [
   "LITELLM_BASE_URL",
   "LITELLM_API_KEY",
   "LITELLM_API_KEY_HELPER",
+  "LITELLM_HEADERS",
   "LITELLM_DISCOVERY_TIMEOUT_MS",
   "LITELLM_GCLOUD_TOKEN_AUTH",
   "GOOGLE_APPLICATION_CREDENTIALS",
@@ -21,6 +22,7 @@ vi.unmock("@earendil-works/pi-coding-agent");
 type TestProviderConfig = {
   baseUrl?: string;
   apiKey?: string;
+  headers?: Record<string, string>;
   models?: unknown[];
   oauth?: {
     login: (callbacks: {
@@ -62,6 +64,16 @@ function jsonResponse(status: number, body: unknown): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+/** Captures process.stderr.write into a buffer accessor. */
+function captureStderr(): { buffer: () => string; restore: () => void } {
+  const chunks: string[] = [];
+  const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    chunks.push(String(chunk));
+    return true;
+  });
+  return { buffer: () => chunks.join(""), restore: () => spy.mockRestore() };
 }
 
 async function makeAgentDir(): Promise<string> {
@@ -1009,5 +1021,133 @@ describe("extension startup", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow("SSO token is required");
+  });
+});
+
+describe("custom headers (LITELLM_HEADERS)", () => {
+  it("passes valid JSON headers through to the provider verbatim", async () => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_HEADERS = JSON.stringify({
+      "Helicone-Auth-Token": "$HELICONE_KEY",
+      "X-Team": "eng",
+      "X-Command": "!gcloud auth print-access-token",
+    });
+    const stderr = captureStderr();
+
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    // Values pass through untouched; Pi resolves `$ENV`/`!command` per request.
+    expect(pi.providers[0]?.config.headers).toEqual({
+      "Helicone-Auth-Token": "$HELICONE_KEY",
+      "X-Team": "eng",
+      "X-Command": "!gcloud auth print-access-token",
+    });
+    expect(stderr.buffer()).toBe("");
+    stderr.restore();
+  });
+
+  it("registers with no headers when LITELLM_HEADERS is unset", async () => {
+    const agentDir = await makeAgentDir();
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    expect(pi.providers[0]?.config.headers).toBeUndefined();
+  });
+
+  it("registers with no headers and warns on invalid JSON", async () => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_HEADERS = "{not json";
+    const stderr = captureStderr();
+
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    expect(pi.providers[0]?.config.headers).toBeUndefined();
+    expect(stderr.buffer()).toContain("ignoring LITELLM_HEADERS (invalid JSON");
+    stderr.restore();
+  });
+
+  it.each(['["a"]', '"string"', "42", "null"])("warns and returns no headers when the value is %s", async (value) => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_HEADERS = value;
+    const stderr = captureStderr();
+
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    expect(pi.providers[0]?.config.headers).toBeUndefined();
+    expect(stderr.buffer()).toContain("expected a JSON object");
+    stderr.restore();
+  });
+
+  it("drops non-string entries and empty-name keys but keeps the rest", async () => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_HEADERS = JSON.stringify({
+      "X-Keep": "literal",
+      "X-Number": 3,
+      "X-Array": ["a"],
+      "": "empty-name",
+      "X-Object": { nested: true },
+      "X-Also-Keep": "$ENV_VAR",
+    });
+    const stderr = captureStderr();
+
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    expect(pi.providers[0]?.config.headers).toEqual({
+      "X-Keep": "literal",
+      "X-Also-Keep": "$ENV_VAR",
+    });
+    const buffer = stderr.buffer();
+    expect(buffer).toContain('"X-Number"');
+    expect(buffer).toContain('"X-Array"');
+    expect(buffer).toContain('"X-Object"');
+    expect(buffer).toContain("empty name");
+    stderr.restore();
+  });
+
+  it("returns no headers when every entry is dropped", async () => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_HEADERS = JSON.stringify({ "X-Bad": 3, "Y-Bad": [1] });
+    const stderr = captureStderr();
+
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    expect(pi.providers[0]?.config.headers).toBeUndefined();
+    stderr.restore();
+  });
+
+  it("re-reads LITELLM_HEADERS on refresh so login/refresh pick up env changes", async () => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_BASE_URL = "https://litellm.example.com";
+    process.env.LITELLM_API_KEY = "env-key";
+    const stderr = captureStderr();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/model/info"))
+        return jsonResponse(200, { data: [{ model_name: "gpt-4o", model_info: { mode: "chat" } }] });
+      if (url.endsWith("/mcp-rest/tools/list")) return jsonResponse(200, { tools: [] });
+      throw new Error(`unexpected URL: ${url}`);
+    });
+
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+    expect(pi.providers[0]?.config.headers).toBeUndefined();
+
+    process.env.LITELLM_HEADERS = JSON.stringify({ "X-After": "on" });
+    await pi.commands.get("litellm-refresh")?.handler("", { ui: { notify: vi.fn() } });
+
+    expect(pi.providers.at(-1)?.config.headers).toEqual({ "X-After": "on" });
+    stderr.restore();
   });
 });

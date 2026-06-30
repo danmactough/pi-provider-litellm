@@ -13,6 +13,7 @@ import {
   getGcloudTokenCommand,
   isGcloudTokenAuthEnabled,
 } from "./gcloud-token.js";
+import { parseCustomHeaders } from "./headers.js";
 import { getSessionIdFromFile } from "./litellm.js";
 import { createMcpToolDefinitions } from "./mcp-tools.js";
 import { createSkillsPromptSection, createSkillToolDefinitions, listSkills } from "./skills.js";
@@ -21,6 +22,7 @@ import type { AuthFileEntry, CacheFile, DiscoveryOptions, DiscoveryResult, Resol
 const PROVIDER_NAME = "litellm";
 const ENV_BASE_URL = "LITELLM_BASE_URL";
 const ENV_API_KEY = "LITELLM_API_KEY";
+const ENV_HEADERS = "LITELLM_HEADERS";
 const ENV_API_KEY_HELPER = "LITELLM_API_KEY_HELPER";
 const ENV_TIMEOUT = "LITELLM_DISCOVERY_TIMEOUT_MS";
 const ENV_OFFLINE = "LITELLM_OFFLINE";
@@ -510,6 +512,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     models: ProviderModelConfig[],
     apiKeyConfig = creds.apiKeyConfig ?? getApiKeyHelperCommand() ?? `$${ENV_API_KEY}`,
   ): void {
+    // Re-read on every (re)registration so login/refresh pick up env changes. Scope:
+    // chat/completions only — discovery, MCP, skills, and login fetches are extension-managed.
+    const headers = parseCustomHeaders(process.env[ENV_HEADERS]);
     pi.registerProvider(PROVIDER_NAME, {
       baseUrl: baseUrl ? `${baseUrl}/v1` : "https://litellm.example.com/v1",
       // When LITELLM_API_KEY_HELPER is set we register the helper as a `!command` provider key.
@@ -521,6 +526,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       // "re-runs the helper command on every request" in tests/index.test.ts.
       apiKey: apiKeyConfig,
       api: "openai-completions",
+      headers,
       models,
       oauth,
     });

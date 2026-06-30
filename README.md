@@ -83,8 +83,15 @@ Stored pi credentials for `litellm` take precedence over `LITELLM_API_KEY`; the 
 | `GOOGLE_APPLICATION_CREDENTIALS` | Google default ADC path | Optional path to an ADC JSON file used by `LITELLM_GCLOUD_TOKEN_AUTH`. If unset, the extension checks the default gcloud ADC locations. |
 | `LITELLM_OFFLINE` | unset | If `1`, skip discovery on this start; use cache only |
 | `LITELLM_DISCOVERY_TIMEOUT_MS` | `5000` | Discovery fetch timeout in ms; `0` to skip discovery |
+| `LITELLM_HEADERS` | unset | JSON object of custom HTTP headers to send on chat/completions requests, e.g. `{"Helicone-Auth-Token":"$HELICONE_KEY","X-Team":"eng"}`. See notes below. |
 
 `LITELLM_DISCOVERY_TIMEOUT_MS=0` only disables startup and refresh model discovery. It does not replace the base URL or API key settings required to send requests when you are not using `/login litellm`.
+
+### Custom headers
+
+`LITELLM_HEADERS` is a JSON object mapping header name to string value. Header values use the same resolution syntax as `LITELLM_API_KEY` (`$ENV_VAR`, `${ENV_VAR}`, `!command`, `$$`, `$!`) and are resolved by Pi per request, so rotating/short-lived values stay fresh. Invalid JSON or non-string entries are dropped with a stderr warning and the provider registers without headers.
+
+These headers apply only to chat/completions (via the registered provider); model discovery, MCP tool calls, skills listing, and `/login litellm` fetches are not affected. Don't set `Authorization` here — Pi sets `Authorization: Bearer <key>` from the configured API key/credential after merging custom headers, so it would be overwritten.
 
 ### Google ADC token auth
 
