@@ -359,6 +359,7 @@ function prepareLiteLLMRequestPayload(
   if (modelId === "llm-gateway/gpt-5.5" && Array.isArray(payload.tools) && payload.tools.length > 0) {
     next ??= { ...payload };
     delete next.reasoning;
+    delete next.reasoning_effort;
     delete next.include_reasoning;
     delete next.reasoning_content;
     delete next.merge_reasoning_content_in_choices;

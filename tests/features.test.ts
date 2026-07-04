@@ -390,6 +390,7 @@ describe("feature parity", () => {
           messages: [],
           tools: [{ type: "function", function: { name: "noop", parameters: { type: "object" } } }],
           reasoning: { effort: "high", summary: "auto" },
+          reasoning_effort: "high",
           include: ["reasoning.encrypted_content", "other"],
           include_reasoning: true,
           reasoning_content: true,
