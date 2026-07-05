@@ -16,6 +16,7 @@ const ENV_KEYS = [
   "LITELLM_GCLOUD_TOKEN_AUTH",
   "GOOGLE_APPLICATION_CREDENTIALS",
   "STORED_LITELLM_KEY",
+  "CUSTOM_LITELLM_KEY",
 ];
 const ORIGINAL_ENV = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));
 
@@ -1529,5 +1530,38 @@ describe("multi-provider hardening", () => {
 
     expect(seenSecretHeaders).toEqual(["v$X"]);
     expect(pi.providers[0]?.config.headers).toEqual({ "x-secret": "v$$X", "x-bang": "$!not-a-command" });
+  });
+
+  it("prefers a configured default-provider apiKey over the env helper command", async () => {
+    const agentDir = await makeAgentDir();
+    const helperPath = await writeHelper(agentDir, ["default-helper-key"]);
+    await writeFile(
+      join(agentDir, "settings.json"),
+      JSON.stringify({
+        litellm: { providers: { litellm: { apiKey: "$CUSTOM_LITELLM_KEY" } } },
+      }),
+      "utf8",
+    );
+    process.env.LITELLM_BASE_URL = "https://litellm.example.com";
+    process.env.LITELLM_API_KEY_HELPER = helperPath;
+    process.env.CUSTOM_LITELLM_KEY = "custom-key";
+    const seenAuthHeaders: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/model/info")) {
+        seenAuthHeaders.push(new Headers(init?.headers).get("authorization") ?? "");
+        return jsonResponse(200, { data: [{ model_name: "gpt-5", model_info: { mode: "chat" } }] });
+      }
+      if (url.endsWith("/mcp-rest/tools/list")) return jsonResponse(200, { tools: [] });
+      throw new Error(`unexpected URL: ${url}`);
+    });
+
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    expect(seenAuthHeaders).toEqual(["Bearer custom-key"]);
+    expect(pi.providers[0]?.config.apiKey).toBe("$CUSTOM_LITELLM_KEY");
+    expect(await readHelperCount(agentDir)).toBe(0);
   });
 });

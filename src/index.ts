@@ -452,8 +452,10 @@ async function resolveCredentials(
         : undefined;
   const gcloudKey = executeHelpers && gcloudCacheKey ? (await getGcloudToken())?.trim() : undefined;
   const helperKey =
-    !authKey && !gcloudKey && executeHelpers && envHelperCommand ? executeApiKeyCommand(envHelperCommand) : undefined;
-  const apiKey = authKey || gcloudKey || helperKey || configuredKey || envKey;
+    !authKey && !gcloudKey && !configuredKey && executeHelpers && envHelperCommand
+      ? executeApiKeyCommand(envHelperCommand)
+      : undefined;
+  const apiKey = authKey || gcloudKey || configuredKey || helperKey || envKey;
 
   let apiKeyFingerprint: string | undefined;
   let apiKeyConfig: string | undefined;
@@ -467,18 +469,18 @@ async function resolveCredentials(
   } else if (!executeHelpers && gcloudCacheKey) {
     apiKeyFingerprint = fingerprint(gcloudCacheKey);
     apiKeyConfig = getGcloudTokenCommand();
-  } else if (helperKey && envHelperCommand) {
-    apiKeyFingerprint = fingerprint(envHelperCommand);
-    apiKeyConfig = envHelperCommand;
-  } else if (!executeHelpers && envHelperCommand) {
-    apiKeyFingerprint = fingerprint(envHelperCommand);
-    apiKeyConfig = envHelperCommand;
   } else if (configuredKey && definition.apiKeyConfig) {
     apiKeyFingerprint = fingerprint(definition.apiKeyConfig.startsWith("!") ? definition.apiKeyConfig : configuredKey);
     apiKeyConfig = definition.apiKeyConfig;
   } else if (!executeHelpers && definition.apiKeyConfig?.startsWith("!")) {
     apiKeyFingerprint = fingerprint(definition.apiKeyConfig);
     apiKeyConfig = definition.apiKeyConfig;
+  } else if (helperKey && envHelperCommand) {
+    apiKeyFingerprint = fingerprint(envHelperCommand);
+    apiKeyConfig = envHelperCommand;
+  } else if (!executeHelpers && envHelperCommand) {
+    apiKeyFingerprint = fingerprint(envHelperCommand);
+    apiKeyConfig = envHelperCommand;
   } else if (envKey) {
     apiKeyFingerprint = fingerprint(envKey);
     apiKeyConfig = `$${ENV_API_KEY}`;
@@ -914,7 +916,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
   function defaultApiKeyConfig(definition: ProviderDefinition): string | undefined {
     if (definition.useDefaultEnv) {
-      return getApiKeyHelperCommand() ?? definition.apiKeyConfig ?? `$${ENV_API_KEY}`;
+      return definition.apiKeyConfig ?? getApiKeyHelperCommand() ?? `$${ENV_API_KEY}`;
     }
     // An alias must never inherit the default provider's env key; leaving the
     // key unset makes requests fail loudly instead of leaking credentials.
