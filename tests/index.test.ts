@@ -1605,4 +1605,32 @@ describe("multi-provider hardening", () => {
     expect(seenAuthHeaders).toEqual(["Bearer stored-alias-key"]);
     expect(await readHelperCount(agentDir)).toBe(0);
   });
+
+  it("warns when a configured apiKey resolves to nothing", async () => {
+    const agentDir = await makeAgentDir();
+    await writeFile(
+      join(agentDir, "settings.json"),
+      JSON.stringify({
+        litellm: {
+          providers: {
+            "litellm-anthropic": {
+              baseUrl: "https://litellm-anthropic.example.com",
+              apiKey: "sk-abc$UNSET_LITELLM_VAR",
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+    process.env.LITELLM_DISCOVERY_TIMEOUT_MS = "0";
+    delete process.env.UNSET_LITELLM_VAR;
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    const extension = await loadExtension(agentDir);
+    await extension(createPi());
+
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining("LiteLLM (litellm-anthropic): configured apiKey did not resolve"),
+    );
+  });
 });

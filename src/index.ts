@@ -387,6 +387,17 @@ function resolveConfigValue(config: string, { executeCommands }: { executeComman
   return resolveTemplateConfigValue(config);
 }
 
+const warnedUnresolvedApiKeys = new Set<string>();
+
+function warnUnresolvedApiKeyConfig(providerName: string, config: string): void {
+  const key = `${providerName} ${config}`;
+  if (warnedUnresolvedApiKeys.has(key)) return;
+  warnedUnresolvedApiKeys.add(key);
+  process.stderr.write(
+    `LiteLLM (${providerName}): configured apiKey did not resolve (unset environment variable?); use $$ for a literal $.\n`,
+  );
+}
+
 function parseHeaderRecord(value: unknown): Record<string, string> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const headers: Record<string, string> = {};
@@ -450,10 +461,13 @@ async function resolveCredentials(
   const gcloudKey = executeHelpers && gcloudCacheKey ? (await getGcloudToken())?.trim() : undefined;
   // Resolved lazily so a `!command` key is not executed when a
   // higher-precedence credential (saved auth, gcloud token) already won.
-  const configuredKey =
-    !authKey && !gcloudKey && definition.apiKeyConfig
-      ? resolveConfigValue(definition.apiKeyConfig, { executeCommands: executeHelpers })
-      : undefined;
+  let configuredKey: string | undefined;
+  if (!authKey && !gcloudKey && definition.apiKeyConfig) {
+    configuredKey = resolveConfigValue(definition.apiKeyConfig, { executeCommands: executeHelpers });
+    if (configuredKey === undefined && !definition.apiKeyConfig.startsWith("!")) {
+      warnUnresolvedApiKeyConfig(definition.name, definition.apiKeyConfig);
+    }
+  }
   const helperKey =
     !authKey && !gcloudKey && !configuredKey && executeHelpers && envHelperCommand
       ? executeApiKeyCommand(envHelperCommand)
