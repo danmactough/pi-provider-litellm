@@ -53,7 +53,6 @@ type RefreshResult = { models: ProviderModelConfig[]; source: string };
 type ProviderRefreshResult = RefreshResult & { providerName: string };
 
 type RawProviderSettings = {
-  name?: unknown;
   displayName?: unknown;
   baseUrl?: unknown;
   apiKey?: unknown;
@@ -1062,10 +1061,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     }
   }
 
-  if (defaultState) {
-    registerSkillTools(defaultState);
-    await registerMcpTools(defaultState);
-  }
+  registerSkillTools(defaultState);
+  await registerMcpTools(defaultState);
 
   async function refreshModelsAndCosts(state: ProviderState): Promise<ProviderRefreshResult> {
     const fresh = await resolveCredentials(state.definition);
@@ -1221,7 +1218,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   });
 
   pi.on("before_agent_start", async (event) => {
-    if (discoveryDisabledReason() || !defaultState) return;
+    if (discoveryDisabledReason()) return;
     const fresh = await resolveCredentials(defaultState.definition);
     if (!fresh.baseUrl || !fresh.apiKey) return;
     const skills = await listSkills(fresh.baseUrl, fresh.apiKey, defaultState.headers);
