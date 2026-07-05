@@ -1439,3 +1439,45 @@ describe("extension startup", () => {
     ).rejects.toThrow("SSO token is required");
   });
 });
+
+describe("multi-provider hardening", () => {
+  it("registers remaining providers when one alias's credential helper fails at startup", async () => {
+    const agentDir = await makeAgentDir();
+    const failingHelper = join(agentDir, "broken-alias-helper.sh");
+    await writeFile(failingHelper, "#!/usr/bin/env bash\nexit 42\n", { mode: 0o700 });
+    await writeFile(
+      join(agentDir, "settings.json"),
+      JSON.stringify({
+        litellm: {
+          providers: {
+            "litellm-anthropic": {
+              baseUrl: "https://litellm-anthropic.example.com",
+              apiKey: `!${failingHelper}`,
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+    process.env.LITELLM_BASE_URL = "https://litellm.example.com";
+    process.env.LITELLM_API_KEY = "openai-key";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "https://litellm.example.com/model/info") {
+        return jsonResponse(200, { data: [{ model_name: "gpt-5", model_info: { mode: "chat" } }] });
+      }
+      if (url.endsWith("/mcp-rest/tools/list")) return jsonResponse(200, { tools: [] });
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    expect(pi.providers.map((provider) => provider.name)).toEqual(["litellm", "litellm-anthropic"]);
+    expect((pi.providers[0]?.config.models as Array<{ id: string }>).map((model) => model.id)).toEqual(["gpt-5"]);
+    expect(pi.providers[1]?.config.models).toEqual([]);
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("litellm-anthropic"));
+  });
+});

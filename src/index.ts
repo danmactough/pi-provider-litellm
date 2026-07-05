@@ -833,12 +833,21 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         creds = await resolveCredentials(definition);
         fp = creds.apiKeyFingerprint;
       } catch (error) {
-        if (!cacheValid || !cache) throw error;
+        // A broken alias must not abort activation for the other providers;
+        // only the default provider keeps the historical fail-fast behavior.
+        if ((!cacheValid || !cache) && definition.useDefaultEnv) throw error;
         credentialWarning = error instanceof Error ? error.message : String(error);
-        process.stderr.write(
-          `LiteLLM (${definition.name}): discovery failed (${credentialWarning}); using cached models.\n`,
-        );
-        models = cache.models;
+        if (cacheValid && cache) {
+          process.stderr.write(
+            `LiteLLM (${definition.name}): discovery failed (${credentialWarning}); using cached models.\n`,
+          );
+          models = cache.models;
+        } else {
+          process.stderr.write(
+            `LiteLLM (${definition.name}): credential resolution failed (${credentialWarning}); registering provider with no models.\n`,
+          );
+          models = [];
+        }
       }
     }
 
