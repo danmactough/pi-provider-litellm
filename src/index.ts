@@ -416,6 +416,19 @@ function resolveHeaders(definition: ProviderDefinition): Record<string, string> 
   return parseHeaderRecord(definition.headers);
 }
 
+// Pi core resolves registered header values with the same $VAR/!command syntax
+// at request time, so already-resolved literals must be escaped or they get
+// resolved a second time ($UNSET would then fail every request).
+function escapeConfigValue(value: string): string {
+  const escaped = value.replace(/\$/g, "$$$$");
+  return escaped.startsWith("!") ? `$${escaped}` : escaped;
+}
+
+function escapeHeaderConfig(headers: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  return Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, escapeConfigValue(value)]));
+}
+
 async function resolveCredentials(
   definition: ProviderDefinition,
   { executeHelpers = true } = {},
@@ -919,7 +932,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       baseUrl: state.creds.baseUrl ? `${state.creds.baseUrl}/v1` : "https://litellm.example.com/v1",
       apiKey: apiKeyConfig ?? defaultApiKeyConfig(definition),
       api: "openai-completions",
-      headers: state.headers,
+      headers: escapeHeaderConfig(state.headers),
       models,
       oauth: definition.enableOAuth ? oauth : undefined,
     });

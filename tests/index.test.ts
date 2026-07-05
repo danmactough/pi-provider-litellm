@@ -1506,4 +1506,28 @@ describe("multi-provider hardening", () => {
     expect(pi.providers[1]?.name).toBe("litellm-anthropic");
     expect(pi.providers[1]?.config.apiKey).toBeUndefined();
   });
+
+  it("escapes resolved header values so Pi core does not re-resolve them per request", async () => {
+    const agentDir = await makeAgentDir();
+    process.env.LITELLM_BASE_URL = "https://litellm.example.com";
+    process.env.LITELLM_API_KEY = "openai-key";
+    process.env.LITELLM_HEADERS = JSON.stringify({ "x-secret": "v$$X", "x-bang": "!not-a-command" });
+    const seenSecretHeaders: Array<string | null> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/model/info")) {
+        seenSecretHeaders.push(new Headers(init?.headers).get("x-secret"));
+        return jsonResponse(200, { data: [{ model_name: "gpt-5", model_info: { mode: "chat" } }] });
+      }
+      if (url.endsWith("/mcp-rest/tools/list")) return jsonResponse(200, { tools: [] });
+      throw new Error(`unexpected URL: ${url}`);
+    });
+
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    expect(seenSecretHeaders).toEqual(["v$X"]);
+    expect(pi.providers[0]?.config.headers).toEqual({ "x-secret": "v$$X", "x-bang": "$!not-a-command" });
+  });
 });
