@@ -418,6 +418,55 @@ describe("extension startup", () => {
     ]);
   });
 
+  it("applies overrides from models.json with comments and trailing commas", async () => {
+    const agentDir = await makeAgentDir();
+    const helperPath = await writeHelper(agentDir, [makeJwt(Math.floor(Date.now() / 1000) + 3600)]);
+    await writeModelCache(agentDir, helperPath);
+    await writeFile(
+      join(agentDir, "models.json"),
+      `{
+  // raise the context window
+  "providers": {
+    "litellm": {
+      "modelOverrides": {
+        "cached-model": { "contextWindow": 272000, },
+      },
+    },
+  },
+}`,
+      "utf8",
+    );
+    process.env.LITELLM_BASE_URL = "https://litellm.example.com";
+    process.env.LITELLM_API_KEY_HELPER = helperPath;
+    process.env.LITELLM_DISCOVERY_TIMEOUT_MS = "0";
+
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    expect(pi.providers[0]?.config.models).toEqual([
+      expect.objectContaining({ id: "cached-model", contextWindow: 272_000 }),
+    ]);
+  });
+
+  it("warns and ignores overrides when models.json is malformed", async () => {
+    const agentDir = await makeAgentDir();
+    const helperPath = await writeHelper(agentDir, [makeJwt(Math.floor(Date.now() / 1000) + 3600)]);
+    await writeModelCache(agentDir, helperPath);
+    await writeFile(join(agentDir, "models.json"), "{ not json", "utf8");
+    process.env.LITELLM_BASE_URL = "https://litellm.example.com";
+    process.env.LITELLM_API_KEY_HELPER = helperPath;
+    process.env.LITELLM_DISCOVERY_TIMEOUT_MS = "0";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const extension = await loadExtension(agentDir);
+    const pi = createPi();
+    await extension(pi);
+
+    expect(pi.providers[0]?.config.models).toEqual([expect.objectContaining({ id: "cached-model" })]);
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("models.json"));
+  });
+
   it("discovers with the resolved stored auth key before LITELLM_API_KEY", async () => {
     const agentDir = await makeAgentDir();
     await writeFile(

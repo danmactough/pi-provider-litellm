@@ -57,14 +57,29 @@ function getCachePath(): string {
   return join(getAgentDir(), CACHE_FILENAME);
 }
 
+// Same tolerance as pi core's models.json loader (stripJsonComments in dist/utils/json.js):
+// strip `//` line comments and trailing commas, leaving string literals untouched.
+function stripJsonComments(input: string): string {
+  return input
+    .replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (m) => (m[0] === '"' ? m : ""))
+    .replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (m, tail: string | undefined) => tail ?? m);
+}
+
 async function readModelOverrides(): Promise<Map<string, ModelOverride>> {
+  let raw: string;
   try {
-    const raw = await readFile(join(getAgentDir(), "models.json"), "utf8");
-    const config = JSON.parse(raw) as {
+    raw = await readFile(join(getAgentDir(), "models.json"), "utf8");
+  } catch {
+    return new Map();
+  }
+  try {
+    const config = JSON.parse(stripJsonComments(raw)) as {
       providers?: Record<string, { modelOverrides?: Record<string, ModelOverride> }>;
     };
     return new Map(Object.entries(config.providers?.[PROVIDER_NAME]?.modelOverrides ?? {}));
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`LiteLLM: ignoring model overrides (failed to parse models.json: ${message}).\n`);
     return new Map();
   }
 }
