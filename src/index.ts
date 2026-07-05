@@ -395,7 +395,7 @@ function resolveConfigValue(config: string, { executeCommands }: { executeComman
 const warnedUnresolvedApiKeys = new Set<string>();
 
 function warnUnresolvedApiKeyConfig(providerName: string, config: string): void {
-  const key = `${providerName} ${config}`;
+  const key = `${providerName} ${config}`;
   if (warnedUnresolvedApiKeys.has(key)) return;
   warnedUnresolvedApiKeys.add(key);
   process.stderr.write(
@@ -980,24 +980,28 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     });
   }
 
+  function defaultLoginOptions(): Parameters<typeof loginLiteLLM>[1] {
+    return {
+      cachePath: getCachePath(PROVIDER_NAME),
+      headers: defaultState.headers,
+      onCacheWrite: async (next) => {
+        defaultState.cacheFetchedAt = next.fetchedAt;
+        const overridden = await applyOverrides(PROVIDER_NAME, next.models);
+        defaultState.models = overridden;
+        defaultState.creds = {
+          ...defaultState.creds,
+          baseUrl: next.baseUrl,
+          apiKeyFingerprint: next.apiKeyFingerprint,
+        };
+        registerProvider(defaultState, overridden);
+        updateAllCosts();
+      },
+    };
+  }
+
   const oauth = {
     name: "LiteLLM",
-    login: (callbacks: OAuthLoginCallbacks) =>
-      loginLiteLLM(callbacks, {
-        cachePath: getCachePath(PROVIDER_NAME),
-        headers: defaultState.headers,
-        onCacheWrite: (next) => {
-          defaultState.cacheFetchedAt = next.fetchedAt;
-          defaultState.models = next.models;
-          defaultState.creds = {
-            ...defaultState.creds,
-            baseUrl: next.baseUrl,
-            apiKeyFingerprint: next.apiKeyFingerprint,
-          };
-          registerProvider(defaultState, next.models);
-          updateAllCosts();
-        },
-      }),
+    login: (callbacks: OAuthLoginCallbacks) => loginLiteLLM(callbacks, defaultLoginOptions()),
     refreshToken: refreshLiteLLM,
     getApiKey: getLiteLLMApiKey,
     modifyModels: modifyLiteLLMModels,
@@ -1118,22 +1122,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         onSelect: async () => undefined,
         signal: ctx.signal,
       },
-      {
-        cachePath: getCachePath(PROVIDER_NAME),
-        headers: defaultState.headers,
-        onCacheWrite: async (next) => {
-          defaultState.cacheFetchedAt = next.fetchedAt;
-          const overridden = await applyOverrides(PROVIDER_NAME, next.models);
-          defaultState.models = overridden;
-          defaultState.creds = {
-            ...defaultState.creds,
-            baseUrl: next.baseUrl,
-            apiKeyFingerprint: next.apiKeyFingerprint,
-          };
-          registerProvider(defaultState, overridden);
-          updateAllCosts();
-        },
-      },
+      defaultLoginOptions(),
     );
 
     ctx.modelRegistry.authStorage.set(PROVIDER_NAME, { type: "oauth", ...credential });
