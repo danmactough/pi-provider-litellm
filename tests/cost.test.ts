@@ -76,4 +76,31 @@ describe("setupLiteLLMCostTracking", () => {
 
     expect(result.message.usage.cost.total).toBe(0.42);
   });
+
+  it("does not let one provider's headerless response clear another provider's pending cost", async () => {
+    const pi = createPi();
+    setupLiteLLMCostTracking(pi as any, [
+      { provider: "litellm", models: [model("gpt-5", { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 })] },
+      {
+        provider: "litellm-anthropic",
+        models: [model("claude-sonnet", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })],
+      },
+    ]);
+
+    const responseHandler = pi.handlers.get("after_provider_response")?.[0];
+    // Default provider's response carries an accurate cost header.
+    responseHandler?.(
+      { headers: { "x-litellm-response-cost": "0.42" } },
+      { model: { provider: "litellm", id: "gpt-5" } },
+    );
+    // Alias provider's response arrives before the default's message_end and has no cost header.
+    responseHandler?.({ headers: {} }, { model: { provider: "litellm-anthropic", id: "claude-sonnet" } });
+
+    const endHandler = pi.handlers.get("message_end")?.[0];
+    const result = await endHandler?.({
+      message: { role: "assistant", provider: "litellm", model: "gpt-5", usage: { input: 100, output: 50 } },
+    });
+
+    expect(result.message.usage.cost.total).toBe(0.42);
+  });
 });
