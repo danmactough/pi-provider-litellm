@@ -146,6 +146,10 @@ describe("discoverModels via /model/info", () => {
               },
             },
             {
+              model_name: "gpt-5.3-codex",
+              model_info: { mode: "responses" },
+            },
+            {
               model_name: "openai/text-embedding-3-large",
               model_info: { mode: "embedding" },
             },
@@ -158,8 +162,8 @@ describe("discoverModels via /model/info", () => {
     const result = await discoverModels("https://litellm.example.com", "sk-test", {});
 
     expect(result.source).toBe("model_info");
-    // embedding model filtered out by mode !== "chat"
-    expect(result.models).toHaveLength(2);
+    // embedding model filtered out by mode !== "chat" or "responses"
+    expect(result.models).toHaveLength(3);
 
     const anthropic = result.models.find((m) => m.id === "anthropic/claude-3-5-sonnet");
     expect(anthropic).toMatchObject({
@@ -176,6 +180,15 @@ describe("discoverModels via /model/info", () => {
     const openai = result.models.find((m) => m.id === "openai/gpt-4o");
     expect(openai).toMatchObject({
       id: "openai/gpt-4o",
+      api: undefined,
+      input: ["text"],
+      compat: { supportsStore: false },
+    });
+
+    const responses = result.models.find((m) => m.id === "gpt-5.3-codex");
+    expect(responses).toMatchObject({
+      id: "gpt-5.3-codex",
+      api: "openai-responses",
       input: ["text"],
       compat: { supportsStore: false },
     });
@@ -318,6 +331,7 @@ describe("discoverModels fallback to /health", () => {
           healthy_endpoints: [
             { model: "vertex/claude-sonnet", model_id: "uuid-1" },
             { model: "openai/gpt-4o-mini", model_id: "uuid-2" },
+            { model: "gpt-5.3-codex", model_id: "uuid-3" },
           ],
         });
       }
@@ -351,6 +365,11 @@ describe("discoverModels fallback to /health", () => {
           ],
         });
       }
+      if (url.endsWith("/model/info?litellm_model_id=uuid-3")) {
+        return jsonResponse(200, {
+          data: [{ model_name: "gpt-5.3-codex", model_info: { mode: "responses" } }],
+        });
+      }
       throw new Error(`unexpected URL: ${url}`);
     });
 
@@ -362,14 +381,20 @@ describe("discoverModels fallback to /health", () => {
       "https://litellm.example.com/health",
       "https://litellm.example.com/model/info?litellm_model_id=uuid-1",
       "https://litellm.example.com/model/info?litellm_model_id=uuid-2",
+      "https://litellm.example.com/model/info?litellm_model_id=uuid-3",
     ]);
     expect(result.source).toBe("health");
-    expect(result.models.map((model) => model.id)).toEqual(["vertex/claude-sonnet", "openai/gpt-4o-mini"]);
+    expect(result.models.map((model) => model.id)).toEqual([
+      "vertex/claude-sonnet",
+      "openai/gpt-4o-mini",
+      "gpt-5.3-codex",
+    ]);
     expect(result.models[0]).toMatchObject({
       input: ["text", "image"],
       contextWindow: 200000,
       compat: { supportsStore: false, cacheControlFormat: "anthropic" },
     });
+    expect(result.models[2]).toMatchObject({ api: "openai-responses" });
   });
 
   it("uses healthy endpoint model names when /health entries do not include model ids", async () => {

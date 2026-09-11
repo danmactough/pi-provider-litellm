@@ -253,15 +253,23 @@ function mapModelsDevMetadata(model: ModelsDevModel | undefined): Partial<Provid
   return metadata;
 }
 
+function apiFromLiteLLMMode(mode: string | undefined): Api | undefined {
+  if (!mode || mode === "chat") return undefined;
+  if (mode === "responses") return "openai-responses";
+  return undefined;
+}
+
 function mapFromModelInfo(entry: ModelInfoEntry): ProviderModelConfig | undefined {
   const id = entry.model_name;
   if (!id) return undefined;
   const info = entry.model_info ?? {};
-  if (info.mode && info.mode !== "chat") return undefined;
+  const api = apiFromLiteLLMMode(info.mode);
+  if (info.mode && !api && info.mode !== "chat") return undefined;
   const catalogModel = findCatalogModel(id);
   return {
     id,
     name: id,
+    api,
     reasoning: info.supports_reasoning ?? false,
     input: info.supports_vision ? ["text", "image"] : ["text"],
     cost: mapModelInfoCost(info, catalogModel?.cost),
@@ -277,12 +285,14 @@ function mapFromHealthModelInfo(
 ): ProviderModelConfig | undefined {
   const model = mapFromModelInfo(entry);
   if (model || !fallbackId) return model;
-  if (entry.model_info?.mode && entry.model_info.mode !== "chat") return undefined;
   const info = entry.model_info ?? {};
+  const api = apiFromLiteLLMMode(info.mode);
+  if (info.mode && !api && info.mode !== "chat") return undefined;
   const catalogModel = findCatalogModel(fallbackId);
   return {
     id: fallbackId,
     name: fallbackId,
+    api,
     reasoning: info.supports_reasoning ?? false,
     input: info.supports_vision ? ["text", "image"] : ["text"],
     cost: mapModelInfoCost(info, catalogModel?.cost),
